@@ -49,7 +49,7 @@ Um programa portátil simples e bastante útil para **dividir, renomear e organi
 - Após isso, obedecendo a estrutura de arquivos abaixo, basta realizar o compilamento:
       `pyinstaller build.spec --onefile --noconsole`
 
-OBS.: Foi utilizado a versão mais recente do tesseract. Para inserir mais idiomas, basta consultar em: 
+OBS.: Foi utilizado o .exe da versão mais recente do tesseract. Para inserir os pacotes de idiomas, basta consultar em: 
       https://github.com/tesseract-ocr/tessdata
 
 ---
