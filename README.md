@@ -10,6 +10,7 @@ Um programa portátil simples e bastante útil para **dividir, renomear e organi
 - Renomeia os PDFs com base no favorecido e valor.
 - Detecta automaticamente beneficiários usando OCR (quando necessário).
 - Compacta todos os arquivos em um único `.zip`.
+- Mescla PDFs.
 - **Layouts testados:** Santander, BB, Itaú, BTG e Caixa (menos testado).
 
 ---
@@ -18,9 +19,9 @@ Um programa portátil simples e bastante útil para **dividir, renomear e organi
 
 <p align="center">
 
-  ![image](https://github.com/user-attachments/assets/854704fc-3cae-48a4-bd06-28d18cfe4f34)
+<img src="https://github.com/user-attachments/assets/142ded85-a43d-4473-8ff8-4e3e30e693da" width="700">
 
-  ![image](https://github.com/user-attachments/assets/2bc6ef2d-527b-47e1-9257-e7b235d8219d)
+<img src="https://github.com/user-attachments/assets/9207771f-cfc2-4042-8018-6714d8ceb1e2" width="700">
 
 </p>
 
@@ -33,7 +34,6 @@ Um programa portátil simples e bastante útil para **dividir, renomear e organi
 3. Clique em **"Processar"**.
 4. Os comprovantes processados serão salvos na pasta `comprovantes_divididos` junto com um `.zip`.
 5. **Não identifica em casos de:** Termos que não foram inseridos no script (haverá melhorias futuras) e Caso o documento PDF não seja selecionável.
-6. Link para download: https://bit.ly/DivisorComprovantes
 
 ---
 
@@ -47,7 +47,7 @@ Um programa portátil simples e bastante útil para **dividir, renomear e organi
       `pip install pyinstaller pymupdf PyPDF2 pdf2image pytesseract pillow opencv-python numpy`
 
 - Após isso, obedecendo a estrutura de arquivos abaixo, basta realizar o compilamento:
-      `pyinstaller build.spec --onefile --noconsole`
+      `pyinstaller build.spec`
 
 OBS.: Foi utilizado o .exe da versão mais recente do tesseract. Para inserir os pacotes de idiomas, basta consultar em: 
       https://github.com/tesseract-ocr/tessdata
@@ -64,7 +64,7 @@ OBS.: Foi utilizado o .exe da versão mais recente do tesseract. Para inserir os
 
 Este programa é gratuito, mas você pode ajudar o autor com uma doação — qualquer valor já serve para um café!
 
-### 💳 Pix
+### 💳 Pix / Paypal
 
 sydneypamplona@gmail.com
 
