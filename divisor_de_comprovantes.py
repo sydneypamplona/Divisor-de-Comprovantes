@@ -56,7 +56,7 @@ class FileListbox(tk.Listbox):
     """Listbox com suporte a seleção múltipla e reordenação."""
     def __init__(self, master, **kw):
         kw['selectmode'] = tk.EXTENDED
-        super().__init__(master, kw)
+        super().__init__(master, **kw)
         self.bind('<Button-1>', self.set_current)
         self.bind('<B1-Motion>', self.shift_selection)
         self.curIndex = None
@@ -136,6 +136,7 @@ class PDFProcessorApp:
             pass
 
         self.setup_ui()
+        self.undefined_count = 0  # Contador para documentos indefinidos
 
     def setup_ui(self):
         main_frame = tk.Frame(self.root, padx=20, pady=20)
@@ -187,9 +188,15 @@ class PDFProcessorApp:
         self.progress = ttk.Progressbar(main_frame, orient=tk.HORIZONTAL, length=100, mode='determinate')
         self.progress.pack(fill=tk.X, pady=5)
 
-        # Botão de processamento
-        process_btn = tk.Button(main_frame, text="Processar PDF(s)", command=self.process_pdfs, height=2, width=20)
-        process_btn.pack(pady=10)
+        # Botões de processamento
+        button_frame_bottom = tk.Frame(main_frame)
+        button_frame_bottom.pack(pady=10)
+
+        process_btn = tk.Button(button_frame_bottom, text="Processar PDF(s)", command=self.process_pdfs, height=2, width=20)
+        process_btn.pack(side=tk.LEFT, padx=5)
+
+        rename_btn = tk.Button(button_frame_bottom, text="Renomear PDF(s)", command=self.rename_pdfs, height=2, width=20)
+        rename_btn.pack(side=tk.LEFT)
 
         # Status
         self.status_var = tk.StringVar(value="Pronto - Criado por Sydney Pamplona")
@@ -263,6 +270,16 @@ class PDFProcessorApp:
             return "BENEFICIÁRIO_INDEFINIDO"
         
         texto = str(texto).upper()  # Converter todo o texto para maiúsculas
+
+        # Novo critério para FGTS
+        if "FGTS GRF" in texto:
+            return "FGTS"
+
+        # Novo critério para Santander - Convenio de Arrecadacao
+        if "CONVENIO DE ARRECADACAO" in texto:
+            match = re.search(r"PM\s+([^\n]+)", texto)
+            if match:
+                return match.group(1).strip()[:25]
 
         # Caso especial para "DA EMPRESA"
         if "DA EMPRESA" in texto:
@@ -427,6 +444,20 @@ class PDFProcessorApp:
             
         texto = str(texto).upper()  # Converter todo o texto para maiúsculas
 
+        # Novo critério para "Valor Recolhido:"
+        if "VALOR RECOLHIDO:" in texto:
+            match = re.search(r"VALOR RECOLHIDO:\s*R?\$?\s*([\d\.,]+)", texto)
+            if match:
+                valor = match.group(1).replace('.', '').replace(',', '_')
+                return valor.upper()
+
+        # Novo critério para Santander - Convenio de Arrecadacao
+        if "CONVENIO DE ARRECADACAO" in texto:
+            match = re.search(r"R\$\s*([\d\.,]+)", texto)
+            if match:
+                valor = match.group(1).replace('.', '').replace(',', '_')
+                return valor.upper()
+
         # 1. Padrão específico para Itaú - valor após CNPJ
         padrao_cnpj_valor = re.search(r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}[^\d]*([\d]{1,3}(?:\.?\d{3})*,\d{2})', texto)
         if padrao_cnpj_valor:
@@ -477,6 +508,124 @@ class PDFProcessorApp:
                 
         return "VALOR_INDEFINIDO"
 
+    def remove_numbering_from_filenames(self, output_dir):
+        """Remove os 4 primeiros caracteres (numeração) dos nomes dos arquivos"""
+        try:
+            files = os.listdir(output_dir)
+            renamed_count = 0
+            
+            for filename in files:
+                if len(filename) > 4 and filename.lower().endswith('.pdf'):
+                    new_name = filename[4:]
+                    old_path = os.path.join(output_dir, filename)
+                    new_path = os.path.join(output_dir, new_name)
+                    
+                    # Evita sobrescrever arquivos existentes
+                    counter = 1
+                    while os.path.exists(new_path):
+                        name, ext = os.path.splitext(new_name)
+                        new_path = os.path.join(output_dir, f"{name}_{counter}{ext}")
+                        counter += 1
+                    
+                    os.rename(old_path, new_path)
+                    renamed_count += 1
+            
+            self.log_message(f"✅ Numeração removida de {renamed_count} arquivos em: {output_dir}")
+            return True
+        except Exception as e:
+            self.log_message(f"❌ Erro ao remover numeração: {str(e)}")
+            return False
+
+    def rename_pdfs(self):
+        """Renomeia os PDFs selecionados com base no beneficiário e valor da primeira página"""
+        if self.file_listbox.size() == 0:
+            messagebox.showerror("Erro", "Por favor, adicione pelo menos um arquivo PDF")
+            return
+
+        try:
+            self.status_var.set("Renomeando arquivos...")
+            self.progress["value"] = 0
+            self.log_message("\nIniciando renomeação de arquivos...")
+
+            total_files = self.file_listbox.size()
+            processed_files = 0
+
+            for i in range(total_files):
+                pdf_path = self.file_listbox.get(i)
+                pdf_path = corrigir_caminho(pdf_path)
+                
+                if not os.path.exists(pdf_path):
+                    self.log_message(f"Arquivo não encontrado: {os.path.basename(pdf_path)}")
+                    continue
+
+                try:
+                    # Extrai o texto sem manter o arquivo aberto
+                    texto = None
+                    with fitz.open(pdf_path) as doc:
+                        if len(doc) == 0:
+                            self.log_message(f"Arquivo vazio: {os.path.basename(pdf_path)}")
+                            continue
+                        
+                        # Extrai texto da primeira página
+                        texto = doc.load_page(0).get_text()
+                        
+                        if (texto is None or texto.strip() == "") and self.ocr_var.get():
+                            texto = self.extrair_texto_com_ocr(pdf_path, 0)
+                    
+                    # Fecha o arquivo antes de renomear
+                    if texto is None or texto.strip() == "":
+                        nome = "BENEFICIÁRIO_INDEFINIDO"
+                        valor = "VALOR_INDEFINIDO"
+                    else:
+                        nome = self.extrair_beneficiario(texto)
+                        valor = self.extrair_valor(texto)
+                        
+                        if self.ocr_var.get() and ("INDEFINIDO" in nome or "INDEFINIDO" in valor):
+                            texto_ocr = self.extrair_texto_com_ocr(pdf_path, 0)
+                            if texto_ocr:
+                                if "INDEFINIDO" in nome:
+                                    novo_nome = self.extrair_beneficiario(texto_ocr, True)
+                                    if novo_nome != "BENEFICIÁRIO INDEFINIDO":
+                                        nome = novo_nome
+                                if "INDEFINIDO" in valor:
+                                    novo_valor = self.extrair_valor(texto_ocr, True)
+                                    if novo_valor != "VALOR_INDEFINIDO":
+                                        valor = novo_valor
+
+                    # Cria novo nome
+                    dir_path = os.path.dirname(pdf_path)
+                    base_name = os.path.basename(pdf_path)
+                    name, ext = os.path.splitext(base_name)
+                    new_name = f"{nome}_{valor}{ext}"
+                    new_path = os.path.join(dir_path, new_name)
+                    
+                    # Evita sobrescrever arquivos existentes
+                    counter = 1
+                    while os.path.exists(new_path):
+                        new_name = f"{nome}_{valor}_{counter}{ext}"
+                        new_path = os.path.join(dir_path, new_name)
+                        counter += 1
+                    
+                    # Renomeia o arquivo
+                    os.rename(pdf_path, new_path)
+                    self.log_message(f"Renomeado: {base_name} -> {new_name}")
+                    processed_files += 1
+                    self.progress["value"] = (processed_files / total_files) * 100
+                    self.status_var.set(f"Renomeando arquivos {processed_files}/{total_files}")
+                    self.root.update()
+
+                except Exception as e:
+                    self.log_message(f"Erro ao processar {os.path.basename(pdf_path)}: {str(e)}")
+
+            self.progress["value"] = 100
+            self.status_var.set("Renomeação concluída - Criado por Sydney Pamplona")
+            messagebox.showinfo("Sucesso", "Renomeação concluída com sucesso!")
+
+        except Exception as e:
+            self.log_message(f"\n❌ Erro durante a renomeação: {str(e)}")
+            self.status_var.set("Erro na renomeação")
+            messagebox.showerror("Erro", f"Ocorreu um erro durante a renomeação:\n{str(e)}")
+
     def process_pdfs(self):
         """Processa todos os PDFs na lista"""
         if self.file_listbox.size() == 0:
@@ -487,6 +636,7 @@ class PDFProcessorApp:
             self.status_var.set("Processando...")
             self.progress["value"] = 0
             self.log_message("Iniciando processamento...")
+            self.undefined_count = 0  # Resetar contador de indefinidos
 
             if self.merge_var.get():
                 self.merge_selected_files()
@@ -502,9 +652,20 @@ class PDFProcessorApp:
                     self.status_var.set(f"Processando arquivo {processed_files}/{total_files}")
                     self.root.update()
 
+            # Mostra resumo de documentos indefinidos
+            self.log_message(f"\nRESUMO: {self.undefined_count} documento(s) com beneficiário/valor indefinido")
+
             self.progress["value"] = 100
             self.status_var.set("Processamento concluído - Criado por Sydney Pamplona")
-            messagebox.showinfo("Sucesso", "Processamento concluído com sucesso!")
+            
+            # Pergunta se deseja remover a numeração
+            if not self.merge_var.get() and processed_files > 0:
+                answer = messagebox.askyesno("Opção de Renomeação", 
+                                           "Deseja remover a numeração dos nomes dos arquivos?")
+                if answer:
+                    output_dir = os.path.join(os.path.dirname(self.file_listbox.get(0)), "comprovantes_processados")
+                    if os.path.exists(output_dir):
+                        self.remove_numbering_from_filenames(output_dir)
 
         except Exception as e:
             self.log_message(f"\n❌ Erro durante o processamento: {str(e)}")
@@ -599,10 +760,14 @@ class PDFProcessorApp:
                         nome = "BENEFICIÁRIO_INDEFINIDO"
                         valor = "VALOR_INDEFINIDO"
                         folha = False
+                        self.undefined_count += 1
                     else:
                         nome = self.extrair_beneficiario(texto)
                         valor = self.extrair_valor(texto)
                         folha = (nome == "FOLHA")
+                        
+                        if "INDEFINIDO" in nome or "INDEFINIDO" in valor:
+                            self.undefined_count += 1
                         
                         if self.ocr_var.get() and ("INDEFINIDO" in nome or "INDEFINIDO" in valor):
                             texto_ocr = self.extrair_texto_com_ocr(pdf_path, i)
@@ -611,10 +776,12 @@ class PDFProcessorApp:
                                     novo_nome = self.extrair_beneficiario(texto_ocr, True)
                                     if novo_nome != "BENEFICIÁRIO INDEFINIDO":
                                         nome = novo_nome
+                                        self.undefined_count -= 1
                                 if "INDEFINIDO" in valor:
                                     novo_valor = self.extrair_valor(texto_ocr, True)
                                     if novo_valor != "VALOR_INDEFINIDO":
                                         valor = novo_valor
+                                        self.undefined_count -= 1
 
                     paginas_analisadas.append({
                         'numero': i + 1,
@@ -633,6 +800,7 @@ class PDFProcessorApp:
                         'folha': False,
                         'texto': None
                     })
+                    self.undefined_count += 1
 
             # Segunda passada: gerar os arquivos agrupados corretamente
             i = 0
