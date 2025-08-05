@@ -63,7 +63,7 @@ Um programa portátil simples e bastante útil para **dividir, renomear e organi
 
 ## 🙌 Apoie este projeto
 
-Este programa é código aberto para vocês, mas você pode ajudar o autor com uma doação ou comprando o software (.exe) no payhip (payhip.com/b/jKiwB)
+Este programa é código aberto para vocês, mas você pode ajudar o autor com uma doação ou comprando o software (.exe) no payhip (https://payhip.com/b/jKiwB)
 
 ### 💳 Pix / Paypal
 
