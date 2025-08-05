@@ -7,11 +7,11 @@ Um programa portátil simples e bastante útil para **dividir, renomear e organi
 ## ✨ Funcionalidades
 
 - Divide comprovantes de pagamento em arquivos separados.
-- Renomeia os PDFs com base no favorecido e valor.
-- Detecta automaticamente beneficiários usando OCR (quando necessário).
-- Compacta todos os arquivos em um único `.zip`.
+- RRenomeia os PDFs com base no beneficiário final e valor final.
+- Gera um relatório em Excel e também compacta todos os arquivos em .zip
 - Mescla PDFs.
-- **Layouts testados:** Santander, BB, Itaú, BTG e Caixa (menos testado).
+- Layouts mais testados: Santander, BB, Itaú e BTG.
+- Layouts menos testados: Caixa e Bradesco.
 
 ---
 
@@ -19,9 +19,9 @@ Um programa portátil simples e bastante útil para **dividir, renomear e organi
 
 <p align="center">
 
-<img src="https://github.com/user-attachments/assets/142ded85-a43d-4473-8ff8-4e3e30e693da" width="700">
+<img src="https://github.com/user-attachments/assets/6c74a336-03eb-4649-a10d-28da84f0ae50" width="700">
 
-<img src="https://github.com/user-attachments/assets/9207771f-cfc2-4042-8018-6714d8ceb1e2" width="700">
+<img src="https://github.com/user-attachments/assets/de1555e6-75c1-4c01-a8e9-c7f1f93ad637" width="700">
 
 </p>
 
@@ -32,7 +32,7 @@ Um programa portátil simples e bastante útil para **dividir, renomear e organi
 1. **Execute o programa** (não precisa instalar).
 2. Selecione um arquivo `.pdf` com múltiplos comprovantes.
 3. Clique em **"Processar"**.
-4. Os comprovantes processados serão salvos na pasta `comprovantes_divididos` junto com um `.zip`.
+4. Os comprovantes processados serão salvos na pasta comprovantes_divididos junto com um .zip ou .xlsx.
 5. **Não identifica em casos de:** Termos que não foram inseridos no script (haverá melhorias futuras) e Caso o documento PDF não seja selecionável.
 
 ---
@@ -43,26 +43,27 @@ Um programa portátil simples e bastante útil para **dividir, renomear e organi
 
 - Para utilizar o programa através do executável (.exe) não precisa de instalações.
 
+- Tamanho 670 MB.
+
+- Funciona tanto online quanto offline.
+
 - Para compilar no seu computador pela primeira vez, é necessário instalar as bibliotecas necessárias antes:
       `pip install pyinstaller pymupdf PyPDF2 pdf2image pytesseract pillow opencv-python numpy`
 
 - Após isso, obedecendo a estrutura de arquivos abaixo, basta realizar o compilamento:
       `pyinstaller build.spec`
 
-OBS.: Foi utilizado o .exe da versão mais recente do tesseract. Para inserir os pacotes de idiomas, basta consultar em: 
-      https://github.com/tesseract-ocr/tessdata
-
 ---
 
 ## 📁 Estrutura de arquivo
 
-![image](https://github.com/user-attachments/assets/1136532c-ccea-48f8-98dd-e2b6301c5795)
+<img width="269" height="106" alt="image" src="https://github.com/user-attachments/assets/7f53a2af-8dcc-45ab-ba7c-dd69b9caa530" />
 
 ---
 
 ## 🙌 Apoie este projeto
 
-Este programa é gratuito, mas você pode ajudar o autor com uma doação — qualquer valor já serve para um café!
+Este programa é código aberto para vocês, mas você pode ajudar o autor com uma doação — qualquer valor já serve para um café!
 
 ### 💳 Pix / Paypal
 
