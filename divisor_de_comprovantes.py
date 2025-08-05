@@ -8,13 +8,8 @@ import zipfile
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from PyPDF2 import PdfReader, PdfWriter, PdfMerger
-from pdf2image import convert_from_path
-import pytesseract
-from PIL import Image
-import cv2
-import numpy as np
-import shutil
 from tkinterdnd2 import TkinterDnD as tkDnD, DND_FILES
+import pandas as pd
 
 def corrigir_caminho(caminho):
     """Corrige problemas com separadores de caminho e verifica existência do arquivo."""
@@ -113,30 +108,26 @@ class DragDropListbox(FileListbox):
                 corrected_path = corrigir_caminho(clean_path)
                 if corrected_path not in self.get(0, tk.END):
                     self.insert(tk.END, corrected_path)
-                    self.app.log_message(f"Arquivo adicionado: {os.path.basename(corrected_path)}")
+                    if hasattr(self.app, 'log_text'):
+                        self.app.log_message(f"Arquivo adicionado: {os.path.basename(corrected_path)}")
 
 class PDFProcessorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Divisor de Comprovantes PDF")
-        self.root.geometry("900x750")
+        self.root.geometry("800x700")
+        self.root.minsize(700, 600)
 
         try:
             self.root.iconbitmap(corrigir_caminho(resource_path(os.path.join('assets', 'app.ico'))))
         except:
             pass
 
-        # Configuração do Tesseract
-        try:
-            if getattr(sys, 'frozen', False):
-                pytesseract.pytesseract.tesseract_cmd = corrigir_caminho(resource_path('tesseract.exe'))
-            else:
-                pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-        except:
-            pass
-
+        # Inicializa log_text como None antes de setup_ui
+        self.log_text = None
         self.setup_ui()
         self.undefined_count = 0  # Contador para documentos indefinidos
+        self.current_doc = None  # Para controle do documento atual
 
     def setup_ui(self):
         main_frame = tk.Frame(self.root, padx=20, pady=20)
@@ -146,7 +137,7 @@ class PDFProcessorApp:
 
         # Área de arquivos
         self.drop_area = tk.LabelFrame(main_frame, text="Arquivos PDF (Arraste para adicionar)", padx=5, pady=5)
-        self.drop_area.pack(fill=tk.X, pady=10)
+        self.drop_area.pack(fill=tk.BOTH, expand=True, pady=10)
         
         self.file_listbox = DragDropListbox(self.drop_area, self, height=4)
         self.file_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -173,15 +164,17 @@ class PDFProcessorApp:
         # Separador visual
         ttk.Separator(options_frame, orient='horizontal').pack(fill='x', pady=5)
 
-        self.ocr_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(options_frame, text="Usar OCR quando necessário", variable=self.ocr_var).pack(anchor=tk.W)
-
         self.zip_var = tk.BooleanVar(value=True)
         tk.Checkbutton(options_frame, text="Gerar arquivo ZIP", variable=self.zip_var).pack(anchor=tk.W)
 
+        self.excel_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(options_frame, text="Gerar relatório Excel", variable=self.excel_var).pack(anchor=tk.W)
+
         # Área de log
-        tk.Label(main_frame, text="Log de Processamento:").pack(anchor=tk.W)
-        self.log_text = tk.Text(main_frame, height=15, state=tk.DISABLED)
+        log_frame = tk.Frame(main_frame)
+        log_frame.pack(fill=tk.BOTH, expand=True)
+        tk.Label(log_frame, text="Log de Processamento:").pack(anchor=tk.W)
+        self.log_text = tk.Text(log_frame, height=5, state=tk.DISABLED)
         self.log_text.pack(fill=tk.BOTH, expand=True, pady=5)
 
         # Barra de progresso
@@ -205,9 +198,8 @@ class PDFProcessorApp:
     def toggle_merge_mode(self):
         """Alterna o modo de mesclagem e desativa outras opções"""
         if self.merge_var.get():
-            self.ocr_var.set(False)
             self.zip_var.set(False)
-            # Seleciona automaticamente todos os arquivos quando a opção de mesclagem é ativada
+            self.excel_var.set(False)
             self.file_listbox.selection_clear(0, tk.END)
             self.file_listbox.selection_set(0, tk.END)
 
@@ -223,53 +215,53 @@ class PDFProcessorApp:
         self.log_message("Lista de arquivos limpa")
 
     def log_message(self, message):
+        if not hasattr(self, 'log_text') or self.log_text is None:
+            print(message)
+            return
+            
         self.log_text.config(state=tk.NORMAL)
         self.log_text.insert(tk.END, message + "\n")
+        lines = self.log_text.get("1.0", tk.END).split('\n')
+        if len(lines) > 6:
+            self.log_text.delete("1.0", f"{len(lines)-6}.0")
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
         self.root.update()
-
-    def preprocess_image_for_ocr(self, image):
-        """Melhora a qualidade da imagem para OCR"""
-        img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
-        img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-        img = cv2.medianBlur(img, 3)
-        return Image.fromarray(img)
-
-    def extrair_texto_com_ocr(self, pdf_path, page_num):
-        """Extrai texto de PDF não selecionável usando OCR."""
-        try:
-            pdf_path = corrigir_caminho(pdf_path)
-            images = convert_from_path(pdf_path, first_page=page_num+1, last_page=page_num+1, dpi=300)
-            
-            if not images:
-                self.log_message(f"Página {page_num+1}: Não foi possível converter para imagem")
-                return ""
-                
-            processed_img = self.preprocess_image_for_ocr(images[0])
-            custom_config = r'--oem 3 --psm 6 -l por+eng'
-            texto = pytesseract.image_to_string(processed_img, config=custom_config)
-            
-            return texto if texto else ""
-            
-        except Exception as e:
-            self.log_message(f"Erro no OCR (página {page_num+1}): {str(e)}")
-            return ""
 
     def contem_4_cpfs(self, texto):
         """Verifica se o texto contém pelo menos 4 CPFs no formato XXX.XXX.XXX-XX"""
         if texto is None:
             return False
-            
         cpfs = re.findall(r"\d{3}\.\d{3}\.\d{3}-\d{2}", texto)
         return len(cpfs) >= 4
 
-    def extrair_beneficiario(self, texto, tentativa_ocr=False):
+    def extrair_beneficiario(self, texto):
         """Extrai o nome do beneficiário do texto com tratamento para None"""
         if texto is None or texto.strip() == "":
-            return "BENEFICIÁRIO_INDEFINIDO"
+            return "BENEFICIÁRIO INDEFINIDO"
         
-        texto = str(texto).upper()  # Converter todo o texto para maiúsculas
+        texto = texto.upper()
+
+        # CASO ESPECÍFICO BRADESCO (VINICIUS) - PRIORIDADE MÁXIMA
+        if "DADOS DE QUEM RECEBEU" in texto:
+            partes = texto.split("DADOS DE QUEM RECEBEU")
+            if len(partes) > 1:
+                parte_recebedor = partes[1]
+                match = re.search(r"NOME:\s*([^\n]+)", parte_recebedor)
+                if match:
+                    nome = match.group(1).strip()
+                    if nome and nome != "NOME":
+                        return nome[:25]
+
+        # Critério para SAC BB - entre "BENEFICIARIO:" e "NOME FANTASIA:"
+        if "BENEFICIARIO:" in texto and "NOME FANTASIA:" in texto:
+            partes = texto.split("BENEFICIARIO:")
+            if len(partes) > 1:
+                subpartes = partes[1].split("NOME FANTASIA:")
+                if len(subpartes) > 0:
+                    beneficiario = subpartes[0].strip()
+                    if beneficiario:
+                        return beneficiario.split('\n')[0][:25]
 
         # Novo critério para FGTS
         if "FGTS GRF" in texto:
@@ -283,7 +275,6 @@ class PDFProcessorApp:
 
         # Caso especial para "DA EMPRESA"
         if "DA EMPRESA" in texto:
-            # Padrão 1: "NOME:" seguido de quebra de linha e depois o nome real
             padrao_nome = re.compile(r'NOME:\s*\n\s*([^\n]+)')
             match = padrao_nome.search(texto)
             if match:
@@ -291,46 +282,37 @@ class PDFProcessorApp:
                 if beneficiario and beneficiario not in ['', 'NOME']:
                     return beneficiario[:25]
             
-            # Padrão 2: "NOME:" seguido do nome na mesma linha
             padrao_nome_linha = re.compile(r'NOME:\s*([^\n]+)')
             match = padrao_nome_linha.search(texto)
             if match:
                 beneficiario = match.group(1).strip()
-                # Remove possíveis informações adicionais após o nome
                 beneficiario = re.split(r'\s{2,}|CNPJ|CPF|$', beneficiario)[0]
                 if beneficiario and beneficiario not in ['', 'NOME']:
                     return beneficiario[:25]
 
-        # 1. Caso especial para "DA EMPRESA" - busca após "NOME:"
         if texto.startswith("DA EMPRESA"):
-            # Procura por "NOME:" seguido de espaços e quebras de linha
             match = re.search(r"NOME:\s*(\S.*?)(?:\n|$)", texto, re.IGNORECASE)
             if match:
                 beneficiario = match.group(1).strip()
                 if beneficiario and beneficiario.upper() not in ['', 'NOME']:
                     return beneficiario.upper()[:25]
         
-        # 2. Casos especiais (DARF, CAGEPA)
         if "PAGAMENTO DE DARF" in texto:
             return "DARF"
         if "CAGEPA" in texto:
             return "CAGEPA"
 
-        # 3. Padrão para "SALÁRIO" ou "SALARIOS"
         if "SALÁRIO" in texto or "SALARIOS" in texto:
             return "FOLHA"
 
-        # 4. Padrão para Banco do Brasil - múltiplos CLIENTE:
         clientes = [m.start() for m in re.finditer("CLIENTE:", texto)]
         if len(clientes) >= 2:
-            # Pega o texto após o último CLIENTE:
             ultimo_cliente_pos = clientes[-1]
-            texto_apos = texto[ultimo_cliente_pos+8:]  # +8 para pular "CLIENTE:"
+            texto_apos = texto[ultimo_cliente_pos+8:]
             beneficiario = texto_apos.split('\n')[0].strip()
             if beneficiario:
                 return beneficiario.upper()[:25]
         
-        # 5. Padrão para Banco do Brasil - único CLIENTE: depois FAVORECIDO:
         if "CLIENTE:" in texto and "FAVORECIDO:" in texto:
             partes = texto.split("FAVORECIDO:")
             if len(partes) > 1:
@@ -338,7 +320,6 @@ class PDFProcessorApp:
                 if beneficiario:
                     return beneficiario.upper()[:25]
 
-        # 6. Padrão para "NOME SOCIAL"
         if "NOME SOCIAL:" in texto:
             linhas = texto.split('\n')
             for i, linha in enumerate(linhas):
@@ -347,7 +328,6 @@ class PDFProcessorApp:
                     if beneficiario and beneficiario.upper() not in ['NOME', '']:
                         return beneficiario.upper()[:25]
 
-        # 7. Padrão para "CONVENIO"
         if "CONVENIO" in texto:
             partes = texto.split("CONVENIO")
             if len(partes) > 1:
@@ -355,7 +335,6 @@ class PDFProcessorApp:
                 if beneficiario:
                     return beneficiario.upper()[:25]
 
-        # 8. Padrão para Itaú - NOME DO RECEBEDOR
         if "NOME DO RECEBEDOR:" in texto:
             partes = texto.split("NOME DO RECEBEDOR:")
             if len(partes) > 1:
@@ -363,7 +342,6 @@ class PDFProcessorApp:
                 if beneficiario:
                     return beneficiario.upper()[:25]
 
-        # 9. Padrão para "NOME FANTASIA:"
         if "NOME FANTASIA:" in texto:
             match = re.search(r"NOME FANTASIA:\s*(.*?)(?:\n|$)", texto)
             if match:
@@ -378,7 +356,6 @@ class PDFProcessorApp:
                     if beneficiario:
                         return beneficiario.upper()[:25]
 
-        # 10. Solução para boletos Santander
         if "SANTANDER" in texto and "DADOS DO BENEFICIÁRIO ORIGINAL" in texto:
             padrao_santander = re.compile(
                 r"DADOS DO BENEFICIÁRIO ORIGINAL.*?RAZÃO SOCIAL:\s*([^\n]+)",
@@ -399,7 +376,6 @@ class PDFProcessorApp:
                         if not re.search(r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}', beneficiario):
                             return beneficiario.upper()[:25]
 
-        # 11. Padrões genéricos
         padroes = [
             r"FAVORECIDA:\s*(.+)",
             r"PAGO\s+PARA:?\s*(.+)",
@@ -421,7 +397,7 @@ class PDFProcessorApp:
                 nome = re.sub(r"[^\w\s]", "", nome).strip()
 
                 if "DO PAGADOR" in nome or "FANTASIA" in nome:
-                    return "BENEFICIÁRIO_INDEFINIDO"
+                    return "BENEFICIÁRIO INDEFINIDO"
 
                 if "BENEFICIÁRIO ORIGINAL" in texto and nome == "ORIGINAL":
                     continue
@@ -433,39 +409,57 @@ class PDFProcessorApp:
                             nome = linhas[i + 1].strip()
                             break
 
-                return nome.upper()[:25] if nome else "BENEFICIÁRIO_INDEFINIDO"
+                return nome.upper()[:25] if nome else "BENEFICIÁRIO INDEFINIDO"
 
-        return "BENEFICIÁRIO_INDEFINIDO"
+        return "BENEFICIÁRIO INDEFINIDO"
 
-    def extrair_valor(self, texto, tentativa_ocr=False):
+    def extrair_valor(self, texto):
         """Extrai valor do texto com tratamento para None"""
         if texto is None or texto.strip() == "":
-            return "VALOR_INDEFINIDO"
+            return "VALOR INDEFINIDO"
             
-        texto = str(texto).upper()  # Converter todo o texto para maiúsculas
+        texto = str(texto).upper()
 
-        # Novo critério para "Valor Recolhido:"
+        # PRIORIDADE ABSOLUTA PARA VALOR COBRADO (MESMA LINHA)
+        if "VALOR COBRADO" in texto:
+            # Busca padrão: "VALOR COBRADO" seguido de números
+            match = re.search(r"VALOR COBRADO[:\s]*R?\$?\s*([\d.,]+)", texto)
+            if not match:
+                # Se não encontrar na mesma linha, busca na próxima
+                linhas = texto.split('\n')
+                for i, linha in enumerate(linhas):
+                    if "VALOR COBRADO" in linha and i + 1 < len(linhas):
+                        valor_linha = linhas[i + 1].strip()
+                        match = re.search(r"R?\$?\s*([\d.,]+)", valor_linha)
+            if match:
+                valor = match.group(1).replace('.', '').replace(',', '_')
+                return valor.upper()
+
+        # Caso específico para comprovantes de PIX do Bradesco
+        if "VALOR:" in texto:
+            match = re.search(r"VALOR:\s*R?\$?\s*([\d.,]+)", texto)
+            if match:
+                valor = match.group(1).replace('.', '').replace(',', '_')
+                return valor.upper()
+
         if "VALOR RECOLHIDO:" in texto:
-            match = re.search(r"VALOR RECOLHIDO:\s*R?\$?\s*([\d\.,]+)", texto)
+            match = re.search(r"VALOR RECOLHIDO:\s*R?\$?\s*([\d.,]+)", texto)
             if match:
                 valor = match.group(1).replace('.', '').replace(',', '_')
                 return valor.upper()
 
-        # Novo critério para Santander - Convenio de Arrecadacao
         if "CONVENIO DE ARRECADACAO" in texto:
-            match = re.search(r"R\$\s*([\d\.,]+)", texto)
+            match = re.search(r"R\$\s*([\d.,]+)", texto)
             if match:
                 valor = match.group(1).replace('.', '').replace(',', '_')
                 return valor.upper()
 
-        # 1. Padrão específico para Itaú - valor após CNPJ
         padrao_cnpj_valor = re.search(r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}[^\d]*([\d]{1,3}(?:\.?\d{3})*,\d{2})', texto)
         if padrao_cnpj_valor:
             valor = padrao_cnpj_valor.group(1).replace('.', '').replace(',', '_')
             self.log_message("Valor identificado após CNPJ")
             return valor.upper()
 
-        # 2. Padrão específico para Itaú - valor na linha abaixo de "(=) VALOR DO PAGAMENTO:"
         if "(=) VALOR DO PAGAMENTO:" in texto:
             linhas = texto.split('\n')
             for i, linha in enumerate(linhas):
@@ -476,7 +470,6 @@ class PDFProcessorApp:
                         valor = match.group(0).replace('.', '').replace(',', '_')
                         return valor.upper()
 
-        # 3. Padrão para "VALOR DA TRANSAÇÃO:"
         if "VALOR DA TRANSAÇÃO:" in texto:
             partes = texto.split("VALOR DA TRANSAÇÃO:")
             if len(partes) > 1:
@@ -486,7 +479,6 @@ class PDFProcessorApp:
                     valor = match.group(0).replace('.', '').replace(',', '_')
                     return valor.upper()
 
-        # 4. Padrões genéricos
         padroes = [
             r"\(=\)\s*VALOR\s*DO\s*PAGAMENTO\s*\(R\$\):\s*([\d\.,]+)",
             r"\(=\)\s*VALOR\s*DO\s*PAGAMENTO\s*\(R\$\):\s*\n\s*([\d\.,]+)",
@@ -506,7 +498,7 @@ class PDFProcessorApp:
                 valor = match.group(1).replace(".", "").replace(",", "_")
                 return valor.upper()
                 
-        return "VALOR_INDEFINIDO"
+        return "VALOR INDEFINIDO"
 
     def remove_numbering_from_filenames(self, output_dir):
         """Remove os 4 primeiros caracteres (numeração) dos nomes dos arquivos"""
@@ -520,7 +512,6 @@ class PDFProcessorApp:
                     old_path = os.path.join(output_dir, filename)
                     new_path = os.path.join(output_dir, new_name)
                     
-                    # Evita sobrescrever arquivos existentes
                     counter = 1
                     while os.path.exists(new_path):
                         name, ext = os.path.splitext(new_name)
@@ -534,6 +525,42 @@ class PDFProcessorApp:
             return True
         except Exception as e:
             self.log_message(f"❌ Erro ao remover numeração: {str(e)}")
+            return False
+
+    def generate_excel_report(self, output_dir):
+        """Gera um relatório Excel com os arquivos processados"""
+        try:
+            files = [f for f in os.listdir(output_dir) if f.lower().endswith('.pdf')]
+            if not files:
+                self.log_message("Nenhum arquivo PDF encontrado para gerar relatório")
+                return False
+
+            data = []
+            for filename in files:
+                base_name = os.path.splitext(filename)[0]
+                
+                if base_name[:3].isdigit() and len(base_name) > 4:
+                    base_name = base_name[4:]
+                
+                if '_' in base_name:
+                    beneficiario = base_name.split('_')[0]
+                    valor = base_name.split('_', 1)[1]
+                else:
+                    beneficiario = base_name
+                    valor = "INDEFINIDO"
+
+                data.append({
+                    "Beneficiário Final": beneficiario,
+                    "Valor Final": valor
+                })
+
+            df = pd.DataFrame(data)
+            excel_path = os.path.join(os.path.dirname(output_dir), "relatorio_comprovantes.xlsx")
+            df.to_excel(excel_path, index=False)
+            self.log_message(f"✅ Relatório Excel gerado em: {excel_path}")
+            return True
+        except Exception as e:
+            self.log_message(f"❌ Erro ao gerar relatório Excel: {str(e)}")
             return False
 
     def rename_pdfs(self):
@@ -558,55 +585,54 @@ class PDFProcessorApp:
                     self.log_message(f"Arquivo não encontrado: {os.path.basename(pdf_path)}")
                     continue
 
+                doc = None
                 try:
-                    # Extrai o texto sem manter o arquivo aberto
-                    texto = None
-                    with fitz.open(pdf_path) as doc:
-                        if len(doc) == 0:
-                            self.log_message(f"Arquivo vazio: {os.path.basename(pdf_path)}")
-                            continue
-                        
-                        # Extrai texto da primeira página
-                        texto = doc.load_page(0).get_text()
-                        
-                        if (texto is None or texto.strip() == "") and self.ocr_var.get():
-                            texto = self.extrair_texto_com_ocr(pdf_path, 0)
+                    doc = fitz.open(pdf_path)
                     
-                    # Fecha o arquivo antes de renomear
+                    if len(doc) == 0:
+                        self.log_message(f"Arquivo vazio: {os.path.basename(pdf_path)}")
+                        continue
+
+                    # Extrai o texto antes de qualquer operação com o documento
+                    page = doc.load_page(0)
+                    texto = page.get_text()
+                    
                     if texto is None or texto.strip() == "":
-                        nome = "BENEFICIÁRIO_INDEFINIDO"
-                        valor = "VALOR_INDEFINIDO"
+                        nome = "BENEFICIÁRIO INDEFINIDO"
+                        valor = "VALOR INDEFINIDO"
                     else:
                         nome = self.extrair_beneficiario(texto)
                         valor = self.extrair_valor(texto)
                         
-                        if self.ocr_var.get() and ("INDEFINIDO" in nome or "INDEFINIDO" in valor):
-                            texto_ocr = self.extrair_texto_com_ocr(pdf_path, 0)
-                            if texto_ocr:
-                                if "INDEFINIDO" in nome:
-                                    novo_nome = self.extrair_beneficiario(texto_ocr, True)
-                                    if novo_nome != "BENEFICIÁRIO INDEFINIDO":
-                                        nome = novo_nome
-                                if "INDEFINIDO" in valor:
-                                    novo_valor = self.extrair_valor(texto_ocr, True)
-                                    if novo_valor != "VALOR_INDEFINIDO":
-                                        valor = novo_valor
+                        if "INDEFINIDO" in nome or "INDEFINIDO" in valor:
+                            self.undefined_count += 1
 
-                    # Cria novo nome
                     dir_path = os.path.dirname(pdf_path)
                     base_name = os.path.basename(pdf_path)
                     name, ext = os.path.splitext(base_name)
-                    new_name = f"{nome}_{valor}{ext}"
+                    
+                    # Verifica se ambos são indefinidos para não usar "_"
+                    if nome == "BENEFICIÁRIO INDEFINIDO" and valor == "VALOR INDEFINIDO":
+                        new_name = f"{nome} {valor}{ext}"
+                    else:
+                        new_name = f"{nome}_{valor}{ext}"
+                    
                     new_path = os.path.join(dir_path, new_name)
                     
-                    # Evita sobrescrever arquivos existentes
                     counter = 1
                     while os.path.exists(new_path):
-                        new_name = f"{nome}_{valor}_{counter}{ext}"
+                        if nome == "BENEFICIÁRIO INDEFINIDO" and valor == "VALOR INDEFINIDO":
+                            new_name = f"{nome} {valor} {counter}{ext}"
+                        else:
+                            new_name = f"{nome}_{valor}_{counter}{ext}"
                         new_path = os.path.join(dir_path, new_name)
                         counter += 1
                     
-                    # Renomeia o arquivo
+                    # Fecha o documento antes de renomear
+                    if doc is not None:
+                        doc.close()
+                        doc = None
+                    
                     os.rename(pdf_path, new_path)
                     self.log_message(f"Renomeado: {base_name} -> {new_name}")
                     processed_files += 1
@@ -616,6 +642,18 @@ class PDFProcessorApp:
 
                 except Exception as e:
                     self.log_message(f"Erro ao processar {os.path.basename(pdf_path)}: {str(e)}")
+                    if doc is not None:
+                        try:
+                            doc.close()
+                        except:
+                            pass
+                    continue
+                finally:
+                    if doc is not None:
+                        try:
+                            doc.close()
+                        except:
+                            pass
 
             self.progress["value"] = 100
             self.status_var.set("Renomeação concluída - Criado por Sydney Pamplona")
@@ -625,6 +663,12 @@ class PDFProcessorApp:
             self.log_message(f"\n❌ Erro durante a renomeação: {str(e)}")
             self.status_var.set("Erro na renomeação")
             messagebox.showerror("Erro", f"Ocorreu um erro durante a renomeação:\n{str(e)}")
+        finally:
+            if hasattr(self, 'current_doc') and self.current_doc is not None:
+                try:
+                    self.current_doc.close()
+                except:
+                    pass
 
     def process_pdfs(self):
         """Processa todos os PDFs na lista"""
@@ -636,7 +680,7 @@ class PDFProcessorApp:
             self.status_var.set("Processando...")
             self.progress["value"] = 0
             self.log_message("Iniciando processamento...")
-            self.undefined_count = 0  # Resetar contador de indefinidos
+            self.undefined_count = 0
 
             if self.merge_var.get():
                 self.merge_selected_files()
@@ -652,13 +696,16 @@ class PDFProcessorApp:
                     self.status_var.set(f"Processando arquivo {processed_files}/{total_files}")
                     self.root.update()
 
-            # Mostra resumo de documentos indefinidos
-            self.log_message(f"\nRESUMO: {self.undefined_count} documento(s) com beneficiário/valor indefinido")
+                self.log_message(f"\nRESUMO: {self.undefined_count} documento(s) com beneficiário/valor indefinido")
+
+                if self.excel_var.get() and processed_files > 0:
+                    output_dir = os.path.join(os.path.dirname(self.file_listbox.get(0)), "comprovantes_processados")
+                    if os.path.exists(output_dir):
+                        self.generate_excel_report(output_dir)
 
             self.progress["value"] = 100
             self.status_var.set("Processamento concluído - Criado por Sydney Pamplona")
             
-            # Pergunta se deseja remover a numeração
             if not self.merge_var.get() and processed_files > 0:
                 answer = messagebox.askyesno("Opção de Renomeação", 
                                            "Deseja remover a numeração dos nomes dos arquivos?")
@@ -678,8 +725,8 @@ class PDFProcessorApp:
         if not selected_indices:
             messagebox.showwarning("Nenhum arquivo selecionado", "Por favor, selecione os arquivos para mesclar")
             return
-
-        # Pergunta ao usuário onde salvar o arquivo mesclado
+        
+        # CORREÇÃO: Adicionado diálogo para selecionar o local de salvamento
         output_path = filedialog.asksaveasfilename(
             defaultextension=".pdf",
             filetypes=[("PDF files", "*.pdf")],
@@ -744,21 +791,16 @@ class PDFProcessorApp:
             total_pages = len(doc)
             processos = []
             
-            # Dicionário para controlar nomes duplicados
             contador_nomes = {}
             
-            # Primeira passada: analisar todas as páginas
             paginas_analisadas = []
             for i in range(total_pages):
                 try:
                     texto = doc.load_page(i).get_text()
                     
-                    if (texto is None or texto.strip() == "") and self.ocr_var.get():
-                        texto = self.extrair_texto_com_ocr(pdf_path, i)
-                    
                     if texto is None or texto.strip() == "":
-                        nome = "BENEFICIÁRIO_INDEFINIDO"
-                        valor = "VALOR_INDEFINIDO"
+                        nome = "BENEFICIÁRIO INDEFINIDO"
+                        valor = "VALOR INDEFINIDO"
                         folha = False
                         self.undefined_count += 1
                     else:
@@ -768,20 +810,6 @@ class PDFProcessorApp:
                         
                         if "INDEFINIDO" in nome or "INDEFINIDO" in valor:
                             self.undefined_count += 1
-                        
-                        if self.ocr_var.get() and ("INDEFINIDO" in nome or "INDEFINIDO" in valor):
-                            texto_ocr = self.extrair_texto_com_ocr(pdf_path, i)
-                            if texto_ocr:
-                                if "INDEFINIDO" in nome:
-                                    novo_nome = self.extrair_beneficiario(texto_ocr, True)
-                                    if novo_nome != "BENEFICIÁRIO INDEFINIDO":
-                                        nome = novo_nome
-                                        self.undefined_count -= 1
-                                if "INDEFINIDO" in valor:
-                                    novo_valor = self.extrair_valor(texto_ocr, True)
-                                    if novo_valor != "VALOR_INDEFINIDO":
-                                        valor = novo_valor
-                                        self.undefined_count -= 1
 
                     paginas_analisadas.append({
                         'numero': i + 1,
@@ -795,25 +823,22 @@ class PDFProcessorApp:
                     self.log_message(f"Erro ao analisar página {i+1}: {str(e)}")
                     paginas_analisadas.append({
                         'numero': i + 1,
-                        'nome': "BENEFICIÁRIO_INDEFINIDO",
-                        'valor': "VALOR_INDEFINIDO",
+                        'nome': "BENEFICIÁRIO INDEFINIDO",
+                        'valor': "VALOR INDEFINIDO",
                         'folha': False,
                         'texto': None
                     })
                     self.undefined_count += 1
 
-            # Segunda passada: gerar os arquivos agrupados corretamente
             i = 0
             contador = 1
             while i < total_pages:
                 pagina = paginas_analisadas[i]
                 
                 if pagina['folha']:
-                    # Agrupa páginas de folha de pagamento
                     writer = PdfWriter()
                     writer.add_page(reader.pages[i])
                     
-                    # Adiciona páginas seguintes que têm 4+ CPFs
                     j = i + 1
                     while j < total_pages:
                         texto_pagina = paginas_analisadas[j]['texto']
@@ -823,8 +848,11 @@ class PDFProcessorApp:
                         else:
                             break
                     
-                    # Define o nome do arquivo
-                    nome_arquivo = f"{contador:03d}_FOLHA_{pagina['valor']}.pdf"
+                    if pagina['nome'] == "BENEFICIÁRIO INDEFINIDO" and pagina['valor'] == "VALOR INDEFINIDO":
+                        nome_arquivo = f"{contador:03d}_FOLHA {pagina['valor']}.pdf"
+                    else:
+                        nome_arquivo = f"{contador:03d}_FOLHA_{pagina['valor']}.pdf"
+                    
                     path_out = os.path.join(output_dir, nome_arquivo)
                     
                     with open(path_out, "wb") as f:
@@ -832,17 +860,18 @@ class PDFProcessorApp:
                     processos.append(path_out)
                     contador += 1
                     
-                    i = j  # Pula para a próxima página não processada
+                    i = j
                 else:
-                    # Página individual normal
                     writer = PdfWriter()
                     writer.add_page(reader.pages[i])
                     
-                    # Gera um nome único baseado no conteúdo
                     chave = f"{pagina['nome']}_{pagina['valor']}"
                     contador_nomes[chave] = contador_nomes.get(chave, 0) + 1
                     
-                    nome_arquivo = f"{contador:03d}_{pagina['nome']}_{pagina['valor']}.pdf"
+                    if pagina['nome'] == "BENEFICIÁRIO INDEFINIDO" and pagina['valor'] == "VALOR INDEFINIDO":
+                        nome_arquivo = f"{contador:03d}_{pagina['nome']} {pagina['valor']}.pdf"
+                    else:
+                        nome_arquivo = f"{contador:03d}_{pagina['nome']}_{pagina['valor']}.pdf"
                     
                     path_out = os.path.join(output_dir, nome_arquivo)
                     
@@ -851,7 +880,7 @@ class PDFProcessorApp:
                     processos.append(path_out)
                     contador += 1
                     
-                    i += 1  # Vai para a próxima página
+                    i += 1
 
             if self.zip_var.get() and processos:
                 zip_name = os.path.join(os.path.dirname(pdf_path), 
@@ -869,7 +898,10 @@ class PDFProcessorApp:
             raise
         finally:
             if 'doc' in locals():
-                doc.close()
+                try:
+                    doc.close()
+                except:
+                    pass
 
 if __name__ == "__main__":
     root = tkDnD.Tk()
